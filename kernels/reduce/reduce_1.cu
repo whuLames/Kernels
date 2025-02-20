@@ -4,7 +4,9 @@
 #include <device_launch_parameters.h>
 using namespace std;
 #define THREAD_NUM_PER_BLOCK 256 
-
+/*
+    The optimization of the reduce_1 is to avoid warp divergence.
+ */
 
 // The kernel function of one-iter reduce
 __global__ void reduce_0(float* in, float* out)
@@ -22,14 +24,12 @@ __global__ void reduce_0(float* in, float* out)
     // reduce
     for(int s = 1; s < blockDim.x; s *= 2)
     {
-        // if(tid % (2 * s) == 0)
-        // {
-        //     sdata[tid] += sdata[tid + s];
-        // }
-
-        if((tid&(2*s - 1)) == 0)
+        
+        // int index = 2 * s * tid;
+        int index = tid * (s<<1);
+        if(index < blockDim.x)
         {
-            sdata[tid] += sdata[tid + s];
+            sdata[index] += sdata[index + s];
         }
         __syncthreads();
     }

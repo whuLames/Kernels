@@ -4,7 +4,9 @@
 #include <device_launch_parameters.h>
 using namespace std;
 #define THREAD_NUM_PER_BLOCK 256 
-
+/*
+    The optimization of the reduce_2 is to avoid bank conflict.
+ */
 
 // The kernel function of one-iter reduce
 __global__ void reduce_0(float* in, float* out)
@@ -20,16 +22,11 @@ __global__ void reduce_0(float* in, float* out)
     __syncthreads();
 
     // reduce
-    for(int s = 1; s < blockDim.x; s *= 2)
+    for(int stride = blockDim.x / 2; stride > 0; stride >>= 1)
     {
-        // if(tid % (2 * s) == 0)
-        // {
-        //     sdata[tid] += sdata[tid + s];
-        // }
-
-        if((tid&(2*s - 1)) == 0)
+        if(tid < stride)
         {
-            sdata[tid] += sdata[tid + s];
+            sdata[tid] += sdata[tid + stride];
         }
         __syncthreads();
     }

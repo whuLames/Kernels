@@ -4,7 +4,9 @@
 #include <device_launch_parameters.h>
 using namespace std;
 #define THREAD_NUM_PER_BLOCK 256 
-
+/*
+    The optimization of the reduce_3 is to deal with idle threads.
+ */
 
 // The kernel function of one-iter reduce
 __global__ void reduce_0(float* in, float* out)
@@ -13,23 +15,18 @@ __global__ void reduce_0(float* in, float* out)
     __shared__ float sdata[THREAD_NUM_PER_BLOCK];
 
     int tid = threadIdx.x;
-    int id = blockIdx.x * blockDim.x + tid;
+    int id = blockIdx.x * blockDim.x * 2 + tid;
 
     // load data to shared memory
-    sdata[tid] = in[id];
+    sdata[tid] = in[id] + in[id + blockDim.x];
     __syncthreads();
 
     // reduce
-    for(int s = 1; s < blockDim.x; s *= 2)
+    for(int stride = blockDim.x / 2; stride > 0; stride >>= 1)
     {
-        // if(tid % (2 * s) == 0)
-        // {
-        //     sdata[tid] += sdata[tid + s];
-        // }
-
-        if((tid&(2*s - 1)) == 0)
+        if(tid < stride)
         {
-            sdata[tid] += sdata[tid + s];
+            sdata[tid] += sdata[tid + stride];
         }
         __syncthreads();
     }
@@ -43,8 +40,9 @@ int main(int argc, char** argv)
     // The number of element to reduce
     int N = argc == 2 ? atoi(argv[1]) : 32 * 1024 * 1024;
     cout << "N: " << N << endl;
-    int blockNum = (N + THREAD_NUM_PER_BLOCK - 1) / THREAD_NUM_PER_BLOCK;
+    int blockNum = (N + 2*THREAD_NUM_PER_BLOCK - 1) / (2*THREAD_NUM_PER_BLOCK);
     cout << "blockNum: " << blockNum << endl;
+
     // memory malloc
     float* inCPU = (float*)malloc(N * sizeof(float));
     float* outCPU = (float*)malloc(blockNum * sizeof(float));
@@ -60,12 +58,13 @@ int main(int argc, char** argv)
     float* ans = (float*)malloc(blockNum * sizeof(float));
 
     for(int i = 0; i < blockNum; i ++) ans[i] = 0.0f;
+
     // build the reduce result for correctness check
     for(int i = 0; i < blockNum; i ++)
     {
-        for(int j = 0; j < THREAD_NUM_PER_BLOCK; j ++)
+        for(int j = 0; j < 2 * THREAD_NUM_PER_BLOCK; j ++)
         {
-            int idx = i * THREAD_NUM_PER_BLOCK + j;
+            int idx = i * THREAD_NUM_PER_BLOCK * 2 + j;
             if(idx < N) ans[i] += inCPU[idx];
         }
     }
@@ -73,6 +72,7 @@ int main(int argc, char** argv)
     // memory copy
     cudaMemcpy(inGPU, inCPU, N * sizeof(float), cudaMemcpyHostToDevice);
 
+    
     dim3 gridSize(blockNum, 1);
     dim3 blockSize(THREAD_NUM_PER_BLOCK, 1);
 
@@ -81,6 +81,10 @@ int main(int argc, char** argv)
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
+    /*
+    The optimization of the reduce_3 is to deal with idle threads.
+    */
+    
     cudaEventRecord(start, 0);
     // computation 
     reduce_0<<<gridSize, blockSize>>>(inGPU, outGPU);
