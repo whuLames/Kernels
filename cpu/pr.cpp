@@ -81,8 +81,9 @@ void pagerank(int n, vector<PII>& edges, int rounds, float eps, float dampling_f
 
     do {
         float sum = 0;
+        cout << "Single pr do " << r << "round " << endl;
         for(int i = 0; i < n; i ++) {
-            // cout << "The pr value of vertex: " << i << " is :" << pr_now[i] << " ";
+            cout << "The pr value of vertex: " << i << " is :" << pr_now[i] << "\n";
             sum += pr_now[i];
         }
         // cout << "The sum in round: " << r << " is: " << sum << endl;
@@ -97,12 +98,12 @@ void pagerank(int n, vector<PII>& edges, int rounds, float eps, float dampling_f
 }
 
 
-void vertexCompute(int vertex_id, vector<int>& last, vector<float>& now, vector<int>& head, vector<int>& next, vector<int>& e, vector<int>& degrees)
+void vertexCompute(int vertex_id, vector<float>& last, vector<float>& now, vector<int>& head, vector<int>& next, vector<int>& e, vector<int>& degrees)
 {
     // a thread for a vertex
     static mutex mtx;
-    unique_lock<mutex> lock(mtx); // 构造函数会自动调用lock
-    lock.unlock(); 
+    // unique_lock<mutex> lock(mtx); // 构造函数会自动调用lock
+    // lock.unlock(); 
     
     int n = now.size();
     
@@ -111,7 +112,7 @@ void vertexCompute(int vertex_id, vector<int>& last, vector<float>& now, vector<
         float val = last[vertex_id] / n;
         for(int i = 0; i < n; i ++) {
             // 上锁
-            lock.lock();
+            unique_lock<mutex> lock(mtx);
             now[i] += val;
             lock.unlock();
         }
@@ -119,13 +120,15 @@ void vertexCompute(int vertex_id, vector<int>& last, vector<float>& now, vector<
         float val = last[vertex_id] / degrees[vertex_id];
         for(int i = head[vertex_id]; ~i; i = next[i]) {
             int node = e[i];
-            lock.lock();
+            unique_lock<mutex> lock(mtx);
             now[node] += val;
+            lock.unlock();
         }
     }
 }
-void pagerank_multithreads(int n, vector<PII>& edges, int num_thread, int rounds, float eps, float dampling_factor)
+void pagerank_multithreads(int n, vector<PII>& edges, int rounds, float eps, float dampling_factor)
 {
+    cout << "rounds: " << rounds << endl;
     // return;
     int m = edges.size();
     vector<int> head(n, -1); 
@@ -147,7 +150,6 @@ void pagerank_multithreads(int n, vector<PII>& edges, int num_thread, int rounds
     vector<float> pr_now;
     pr_now.assign(pr_last.begin(), pr_last.end());
     int r = 0;
-    int round = 10;
     /*
     A thread for a vertex in push model
     */
@@ -155,6 +157,7 @@ void pagerank_multithreads(int n, vector<PII>& edges, int num_thread, int rounds
     // vertexCompute(int vertex_id, vector<int>& last, vector<float>& now, vector<int>& head, vector<int>& next, vector<int>& e, vector<int>& degrees)
 
     do {
+        cout << "Round: " << r << " do computation" << endl; 
         pr_last.assign(pr_now.begin(), pr_now.end());
         pr_now.assign(n, 0.0f);
         thread workThreads[n];
@@ -162,16 +165,26 @@ void pagerank_multithreads(int n, vector<PII>& edges, int num_thread, int rounds
             workThreads[i] = thread(vertexCompute, i, ref(pr_last), ref(pr_now), ref(head), ref(next), ref(e), ref(degrees));
         }
         for(int i = 0; i < n; i ++) workThreads[i].join();
-    } while(r < round && !isConvergence(pr_last, pr_now, eps))
 
-   /*
+        for(int i = 0; i < n; i ++) {
+            pr_now[i] = pr_now[i] * 0.85 + (1-dampling_factor) / n;
+        }
 
-   */
+        float sum = 0.0;
+        for(int i = 0; i < n; i ++) {
+            sum += pr_now[i];
+            printf("The value of vertex %d is %f \n", i, pr_now[i]);
+        }
+        printf("sum is %f \n", sum);
+        r ++;
+    } while(r < rounds && !isConvergence(pr_last, pr_now, eps));
+
     
 }   
 
-int main()
+int main(int argc, char** argv)
 {
+    int fuc_id = stoi(argv[1]);
     int n; // the num of nodes;
     int m; // the num of edges
     cin >> n >> m;
@@ -189,5 +202,11 @@ int main()
     float eps, damping_factor;
     cin >> rounds >> eps >> damping_factor;
     cout << "rounds: " << rounds << " eps: " << eps << " factor: " << damping_factor << endl;
-    pagerank(n, edges, rounds, eps, damping_factor);
+    
+    if(fuc_id == 0) pagerank(n, edges, rounds, eps, damping_factor);
+    else if(fuc_id == 1) pagerank_multithreads(n, edges, rounds, eps, damping_factor);
+    else if(fuc_id == 2) {
+        pagerank(n, edges, rounds, eps, damping_factor);
+        pagerank_multithreads(n, edges, rounds, eps, damping_factor);
+    }
 }
