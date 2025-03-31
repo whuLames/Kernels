@@ -2,6 +2,26 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 
+// the struct for online softmax
+struct __align__(8) MS {float m; float s;};
+
+__device__ MS onlineWarpReduce(MS val)
+{
+    #pragma unroll
+    for(int offset=16; offset>0; offset>>=1) {
+        MS tmp;
+        tmp.m = __shfl_xor_sync(0xFFFFFFFF, val.m, offset);
+        tmp.s = __shfl_xor_sync(0xFFFFFFFF, val.s, offset);
+        bool val_bigger = val.m > tmp.m;
+        MS bigger = val_bigger ? val : tmp;
+        MS smaller = val_bigger ? tmp : val;
+        val.m = bigger.m;
+        val.s = smaller.s * expf(bigger.m - smaller.m) + bigger.s; 
+    }
+
+    return val;
+}
+
 __device__ float atomicMax(float* address, float val)
 {
     int* address_as_i = (int*)address;
@@ -66,7 +86,7 @@ __global__ void safe_softmax(float* data, float* out, float* max_val, float* sum
     // Compute the max value
     int tid = threadIdx.x;
     int bid = blockIdx.x;
-    float val = data[bid * blockDim.x + tid];
+    float val = data[bid * blockDim.x + tid]; 
 
     // get the max value of the current block
     float val_in_block = blockMaxReduce(val);
@@ -90,10 +110,58 @@ __global__ void safe_softmax(float* data, float* out, float* max_val, float* sum
     out[bid * blockDim.x + tid] = val_exp / *sum_val;
 }
 
-
-
-__global__ void online_softmax()
+__device__ MS reduce2MS(MS x, MS y)
 {
+    bool x_bigger = x.m > y.m;
+    MS bigger = x_bigger ? x : y;
+    MS smaller = x_bigger ? y : x;
+    x.m = bigger.m;
+    x.s = smaller.s * expf(bigger.m - smaller.m) + bigger.s;
+    return x;
+}
+__global__ void online_softmax(float* data, float* out, int N, int C)
+{
+    // 2-d softmax and one block for a row
+    // online softmax --> 2-pass
+    // 1st pass: compute the max value and sum of the exp value
+    // 2nd pass: compute the softmax value
+    int tid = threadIdx.x;
+    int bid = blockIdx.x;
+    int lane_id = tid % 32;
+    int warp_id = tid / 32;
+    float max_val = -INFINITY;
+    float sum_val = 0.0f;
+    int stride = blockDim.x;
+    MS val = {-INFINITY, 0.0f};
+    __shared__ MS warpRes[32];
+    __shared__ MS blockRes;
+    for(int i = tid; i < C; i += stride)
+    {
+        float new_val = data[bid * C + i];
+        float new_max_val = fmaxf(new_val, max_val);
+        val.m = new_max_val;
+        val.s = val.s * expf(new_max_val - max_val) + expf(new_val - val.m); // 前者修正 后者加上当前位置的value
+    }
+    MS res = onlineWarpReduce(val);
+    if(lane_id == 0)
+    {
+        warpRes[warp_id] = res;
+    }
+    __syncthreads();
+
+    MS val = tid < 32 ? warpRes[tid] : (MS){0.0f, 0.0f};
+    MS block_res = onlineWarpReduce(val);
+    if(tid == 0)
+    {
+        blockRes = block_res;
+    }
+    __syncthreads();
+
+    // 2nd pass
+    for(int i = tid; i < C; i += stride)
+    {
+        out[bid * C + i] = expf(data[bid * C + i] - blockRes.m) / blockRes.s;
+    }
 
 }
 int main(int argc, char** argv)
