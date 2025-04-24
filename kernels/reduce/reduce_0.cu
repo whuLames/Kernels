@@ -27,10 +27,15 @@ __global__ void reduce_0(float* in, float* out)
         //     sdata[tid] += sdata[tid + s];
         // }
 
-        if((tid&(2*s - 1)) == 0)
+        if((tid&(2*s - 1)) == 0) // 这里如何理解
         {
             sdata[tid] += sdata[tid + s];
         }
+
+        // if(tid % (2*s) == 0) 
+        // {
+        //     sdata[tid] += sdata[tid + s];
+        // }
         __syncthreads();
     }
 
