@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
+#define FETCH_FLOAT4(pointer) (reinterpret_cast<float4*>((&pointer))[0])
 
 // used for
 struct __align__(8) MS {float m; float s;};
@@ -105,9 +106,7 @@ __global__ void transpose(float* data, float* out, int M, int N)
 template <
 const int BLOCK_SIZE_M,
 const int BLOCK_SIZE_K,
-const int BLOCK_SIZE_N,
-const int THREAD_SIZE_X,
-const int THREAD_SIZE_Y
+const int BLOCK_SIZE_N
 >
 __global__ void gemm_v1(
     float * __restrict__ A,
@@ -118,4 +117,62 @@ __global__ void gemm_v1(
     const int K)
 {
     // a tiling gemm kernel 
+    // A: M * K   B: K * N   C: M * N 
+    // a block is responsible for a small matrix with BLOCK_SIZE_M * BLOCK_SIZE_N
+
+    // block: (BLOCK_SIZE_M, BLOCK_SIZE_N)  grid: (M / BLOCK_SIZE_M, N / BLOCK_SIZE_N)
+
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    int tid = tx * blockDim.y + ty;
+    __shared__ float As[BLOCK_SIZE_M][BLOCK_SIZE_K];
+    __shared__ float Bs[BLOCK_SIZE_K][BLOCK_SIZE_M];
+
+    int ITER_PER_BLOCK = K / BLOCK_SIZE_K; // 一个block要做多少次循环
+
+    A = &A[BLOCK_SIZE_M * bx * K];
+    B = &B[BLOCK_SIZE_N * by]; 
+    float final_thread_res = 0.0f;
+    for(iter = 0; iter < ITER_PER_BLOCK; iter ++) 
+    {
+        // 每次循环计算部分结果，所有部分结果相加即为最终结果
+        
+        // 1. load the tiling matrix to As and Bs
+        // assume that BM * BN > BM * BK and BN * BK
+        // one thread is responsible for a element loading
+
+        // load As
+        if(tid < BLOCK_SIZE_M * BLOCK_SIZE_K) {
+            int row_id = tid / BLOCK_SIZE_K;
+            int col_id = tid % BLOCK_SIZE_K;
+            As[row_id][col_id] = A[row_id * K + iter * BLOCK_SIZE_K + col_id];
+        }
+
+        // load Bs
+        if(tid < BLOCK_SIZE_N * BLOCK_SIZE_K) {
+            int row_id = tid / BLOCK_SIZE_M;
+            int col_id = tid % BLOCK_SIZE_M;
+            Bs[row_id][col_id] = B[iter * BLOCK_SIZE_K * N + row_id * N + col_id];
+        }
+
+        __syncthreads();
+
+        // do thread-level computation
+        float thread_res = 0.0f;
+        for(int i = 0; i < BLOCK_SIZE_K; i ++) {
+            thread_res += As[tx][i] * Bs[i][ty];
+        }
+
+        // write back the res
+        final_thread_res += thread_res;
+    }
+
+    // write back to Matrix C
+    int row_c = tx * BLOCK_SIZE_M + tx;
+    int col_c = ty * BLOCK_SIZE_N + ty;
+    C[row_c * N + col_c] = final_thread_res;
+
+    // done!
 }

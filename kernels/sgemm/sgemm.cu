@@ -108,7 +108,6 @@ __global__ void gemm_v1(
             As[A_TILE_THREAD_COL+1][i+A_TILE_THREAD_ROW_START] = ldg_a_reg[lda_index + 1];
             As[A_TILE_THREAD_COL+2][i+A_TILE_THREAD_ROW_START] = ldg_a_reg[lda_index + 2];
             As[A_TILE_THREAD_COL+3][i+A_TILE_THREAD_ROW_START] = ldg_a_reg[lda_index + 3];
-
         }
 
         // load B block
